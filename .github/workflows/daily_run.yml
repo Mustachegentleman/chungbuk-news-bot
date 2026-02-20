@@ -1,0 +1,32 @@
+name: Daily Chungbuk Traffic News
+
+on:
+  schedule:
+    # 깃허브 서버는 UTC 기준입니다. 
+    # 한국 시간(KST) 오전 08:30은 UTC 기준 전날 오후 23:30입니다.
+    - cron: '30 23 * * *'
+  workflow_dispatch: # 수동으로도 실행해볼 수 있는 버튼 생성
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Run news bot
+        env:
+          NAVER_ID: ${{ secrets.NAVER_ID }}
+          NAVER_SECRET: ${{ secrets.NAVER_SECRET }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python main.py  # 본인의 파일 이름이 main.py가 아니면 수정하세요
