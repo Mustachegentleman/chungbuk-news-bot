@@ -29,4 +29,4 @@ jobs:
           NAVER_SECRET: ${{ secrets.NAVER_SECRET }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python main.py  # 본인의 파일 이름이 main.py가 아니면 수정하세요
+        run: python Chungbuk_Traffic_Bot.py  # 본인의 파일 이름이 main.py가 아니면 수정하세요
