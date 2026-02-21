@@ -164,7 +164,7 @@ if __name__ == "__main__":
         print(f"[{datetime.datetime.now()}] 전송 성공: {len(news_data)}건")
     except Exception as e:
         print(f"오류 발생: {e}")
-=======
+
 import datetime
 import os
 
