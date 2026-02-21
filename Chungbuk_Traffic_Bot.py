@@ -1,9 +1,10 @@
 import datetime
 import os
 import requests
-import email.utils  # 날짜 파싱을 위해 추가
+import email.utils
+from datetime import timedelta
 
-# 1. 설정값 (환경 변수 사용 권장)
+# 1. 설정값 (GitHub Secrets 연동)
 NAVER_CLIENT_ID = os.environ.get("NAVER_ID")
 NAVER_CLIENT_SECRET = os.environ.get("NAVER_SECRET")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -18,20 +19,40 @@ def get_jaccard_sim(str1, str2):
     return float(len(c)) / union if union > 0 else 0
 
 def is_recent_news(pub_date_str):
-    """기사 발행일이 현재로부터 24시간 이내인지 확인 (추가된 함수)"""
+    """기사 발행일이 현재로부터 24시간 이내인지 확인"""
     try:
-        # 네이버 pubDate (RFC822 형식)를 datetime 객체로 변환
         pub_date = email.utils.parsedate_to_datetime(pub_date_str)
-        now = datetime.datetime.now(pub_date.tzinfo) # 타임존 유지
-        
-        # 현재 시간과 발행 시간의 차이가 24시간(1일) 이내인지 확인
-        diff = now - pub_date
-        return diff < datetime.timedelta(days=1)
+        now = datetime.datetime.now(pub_date.tzinfo)
+        return (now - pub_date) < timedelta(days=1)
     except Exception:
         return False
 
+def get_news_score(item):
+    """기사의 신뢰도 및 정보량을 점수로 환산하여 대표 기사 선정 기준 마련"""
+    score = 0
+    title = item['title']
+    link = item['link']
+    
+    # 1. 네이버 뉴스 플랫폼 링크 우선 (+10점)
+    if "n.news.naver.com" in link:
+        score += 10
+        
+    # 2. 주요 언론사 및 통신사 가점 (+5점)
+    # 지역 유력지 및 중앙 통신사 포함
+    reputable_sources = [
+        "연합뉴스", "뉴시스", "뉴스1", "노컷뉴스", "MBC", "KBS", "SBS", 
+        "충북일보", "동양일보", "중부매일", "충청일보", "충청매일"
+    ]
+    if any(src in title or src in link for src in reputable_sources):
+        score += 5
+        
+    # 3. 제목이 길수록 상세한 정보를 담고 있을 확률이 높음 (+길이 기반 점수)
+    score += len(title) * 0.1
+    
+    return score
+
 def is_valid_news(title):
-    """범죄 및 잡다한 뉴스를 강력하게 차단하고 교통 뉴스만 골라냄"""
+    """범죄 및 불필요한 노이즈 기사 필터링"""
     blacklist = [
         "직업군인이야기", "칼럼", "인사", "부고", "운세", "게시판", "동정", 
         "검거", "구속", "살인", "폭행", "사기", "마약", "성범죄", "횡령", "절도",
@@ -45,19 +66,12 @@ def is_valid_news(title):
         "도로", "교통", "사고", "통제", "공사", "정체", "단속", 
         "개통", "우회", "차량", "신호", "운전", "면허", "하이패스", "터널"
     ]
-
-    if any(word in title for word in traffic_keywords):
-        return True
-
-    return False
+    return any(word in title for word in traffic_keywords)
 
 def fetch_traffic_news():
-    """네이버 API를 통해 뉴스 수집 및 정제"""
-    search_queries = [
-        "충북 교통 사고", "청주 도로 통제", "충북 도로공사", 
-        "충북 실시간 교통", "충북 교통 정체"
-    ]
-    collected_news = []
+    """뉴스 수집, 최신순/키워드 필터링 및 고도화된 중복 제거"""
+    search_queries = ["충북 교통 사고", "청주 도로 통제", "충북 도로공사", "충북 실시간 교통", "충북 교통 정체"]
+    raw_news = []
 
     headers = {
         "X-Naver-Client-Id": NAVER_CLIENT_ID,
@@ -65,33 +79,35 @@ def fetch_traffic_news():
     }
 
     for query in search_queries:
-        url = f"https://openapi.naver.com/v1/search/news.json?query={query}&display=15&sort=sim"
+        url = f"https://openapi.naver.com/v1/search/news.json?query={query}&display=20&sort=sim"
         res = requests.get(url, headers=headers)
 
         if res.status_code == 200:
             items = res.json().get("items", [])
             for item in items:
-                title = (
-                    item["title"]
-                    .replace("<b>", "")
-                    .replace("</b>", "")
-                    .replace("&quot;", '"')
-                    .replace("&apos;", "'")
-                )
-                link = item["link"]
-                pub_date = item.get("pubDate", "") # 날짜 정보 가져오기
+                title = item["title"].replace("<b>", "").replace("</b>", "").replace("&quot;", '"').replace("&apos;", "'")
+                pub_date = item.get("pubDate", "")
 
-                # [수정된 부분] 날짜 필터링(최근 24시간)과 키워드 필터링을 동시에 만족해야 함
+                # 1차 필터: 24시간 이내 + 교통 관련 키워드
                 if is_recent_news(pub_date) and is_valid_news(title):
-                    collected_news.append({"title": title, "link": link})
+                    news_obj = {
+                        "title": title,
+                        "link": item["link"],
+                        "score": get_news_score({"title": title, "link": item["link"]})
+                    }
+                    raw_news.append(news_obj)
 
-    # 중복 제거
+    # 2차 필터: 중복 제거 및 최고 점수 기사 선별
     unique_news = []
-    for news in collected_news:
+    for news in raw_news:
         is_duplicate = False
-        for existing in unique_news:
+        for i, existing in enumerate(unique_news):
+            # 유사도 45% 초과 시 중복으로 간주
             if get_jaccard_sim(news["title"], existing["title"]) > 0.45:
                 is_duplicate = True
+                # 기존 기사보다 점수(신뢰도)가 높으면 교체
+                if news["score"] > existing["score"]:
+                    unique_news[i] = news
                 break
         if not is_duplicate:
             unique_news.append(news)
@@ -99,24 +115,22 @@ def fetch_traffic_news():
     return unique_news
 
 def send_telegram(news_list):
-    """정제된 뉴스 리스트를 텔레그램으로 전송"""
+    """최종 정제된 뉴스를 텔레그램으로 전송"""
     now = datetime.datetime.now()
     date_str = now.strftime("%Y년 %m월 %d일")
 
     if not news_list:
-        message = f"📢 {date_str}\n오늘 충북 지역의 신규 교통 뉴스가 없습니다. (24시간 이내 기준)"
+        message = f"📢 {date_str}\n오늘 충북 지역의 신규 교통 뉴스가 없습니다."
     else:
         message = f"🚗 [{date_str} 충북 교통 뉴스 브리핑]\n\n"
-        for i, news in enumerate(news_list[:12], 1):
+        # 점수가 높은 순으로 정렬하여 전송
+        sorted_news = sorted(news_list, key=lambda x: x['score'], reverse=True)
+        for i, news in enumerate(sorted_news[:10], 1):
             message += f"{i}. {news['title']}\n🔗 {news['link']}\n\n"
-        message += "💡 24시간 이내 최신 뉴스만 수집되었습니다."
+        message += "💡 24시간 이내 최신 뉴스 중 신뢰도가 높은 기사를 엄선했습니다."
 
     send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": CHAT_ID, "text": message, "disable_web_page_preview": True}
     requests.post(send_url, data=payload)
 
 if __name__ == "__main__":
